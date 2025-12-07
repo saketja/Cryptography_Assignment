@@ -22,3 +22,8 @@ While the primary goal of this assignment is to extract **Elliptic Curve Cryptog
 Install the required dependency using pip:
 ```bash
 pip install cryptography
+
+## Usage
+Compile and run the `PA-2.py` file:
+```bash
+python PA-2.py
