@@ -3,9 +3,6 @@
  * * Description:
  * This program implements Willans' Formula to compute the n-th prime number.
  * The formula transforms Wilson's Theorem (a prime detector) into a prime computer.
- * * References:
- * [1] Note on Willans' Formula, Page 3, Source 56
- * [2] Wilson's Theorem construction, Page 1, Source 20
  */
 
 #include <iostream>
