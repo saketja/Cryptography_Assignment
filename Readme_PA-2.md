@@ -23,7 +23,8 @@ Install the required dependency using pip:
 ```bash
 pip install cryptography
 
-## Usage
+### Usage
 Compile and run the `PA-2.py` file:
+````text
 ```bash
 python PA-2.py
