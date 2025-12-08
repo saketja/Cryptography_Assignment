@@ -2,12 +2,9 @@ import ssl
 import socket
 import re
 from cryptography import x509
-from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
-# --- Database of Standard Curves (The "Reference" Book) ---
-# Certificates send a "Name" (OID), not the equation. 
-# We must look up the math parameters based on that name.
+# --- Database of Standard Curves (Reference Parameters) ---
 CURVE_REGISTRY = {
     'secp256r1': {
         "common_name": "NIST P-256",
@@ -25,104 +22,99 @@ CURVE_REGISTRY = {
     }
 }
 
+# ------------------------------------------------------------
+# 1) Certificate Extractor (Networking + File Saving)
+# ------------------------------------------------------------
 class CertificateExtractor:
-    """Module responsible for Network Connections and Raw Extraction"""
-    
+
     @staticmethod
     def clean_hostname(url):
-        # Removes http://, https://, and trailing slashes
+        """Remove http://, https://, and path segments."""
         return re.sub(r'(^https?://)|(/.*$)', '', url)
 
     @staticmethod
     def get_certificate(hostname, port=443):
-        print(f"[*] Connecting to {hostname} on port {port}...")
+        print(f"[*] Connecting to {hostname}:{port} ...")
+
         try:
-            # Create a socket connection
             context = ssl.create_default_context()
-            # We wrap the socket to perform the TLS Handshake
+
             with socket.create_connection((hostname, port), timeout=10) as sock:
                 with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-                    # This retrieves the binary certificate (DER format)
-                    der_cert = ssock.getpeercert(binary_form=True)
-            return der_cert
-        except socket.gaierror:
-            print(f"[!] Error: Could not resolve hostname '{hostname}'. Check spelling.")
-        except ConnectionRefusedError:
-            print(f"[!] Error: Connection refused by {hostname}.")
+                    return ssock.getpeercert(binary_form=True)
+
         except Exception as e:
-            print(f"[!] An unexpected error occurred: {e}")
-        return None
+            print(f"[!] Error: {e}")
+            return None
 
     @staticmethod
-    def save_to_file(der_data, filename="extracted_cert.cer"):
-        """Saves the raw packet data to disk"""
+    def save_to_file(der_data, filename="certificate.cer"):
         with open(filename, "wb") as f:
             f.write(der_data)
-        print(f"[*] Raw certificate saved to '{filename}'")
+        print(f"[*] Saved certificate → {filename}")
 
+
+# ------------------------------------------------------------
+# 2) Certificate Analyzer (X.509 Parsing + ECC Extraction)
+# ------------------------------------------------------------
 class CertificateAnalyzer:
-    """Module responsible for Cryptographic Parsing"""
 
     def __init__(self, der_data):
-        self.cert = x509.load_der_x509_certificate(der_data, default_backend())
+        self.cert = x509.load_der_x509_certificate(der_data)
 
     def print_general_info(self):
-        print("\n--- General Certificate Info ---")
-        # Extract Subject (Who owns it) and Issuer (Who signed it)
-        subject = self.cert.subject.rfc4514_string()
-        issuer = self.cert.issuer.rfc4514_string()
-        print(f"Subject: {subject}")
-        print(f"Issuer:  {issuer}")
-        print(f"Valid From: {self.cert.not_valid_before_utc}")
-        print(f"Valid To:   {self.cert.not_valid_after_utc}")
+        print("\n--- General Certificate Information ---")
+        print(f"Subject:      {self.cert.subject.rfc4514_string()}")
+        print(f"Issuer:       {self.cert.issuer.rfc4514_string()}")
+        print(f"Valid From:   {self.cert.not_valid_before}")
+        print(f"Valid Until:  {self.cert.not_valid_after}")
 
     def analyze_public_key(self):
-        pub_key = self.cert.public_key()
         print("\n--- Cryptographic Parameters ---")
+        pub_key = self.cert.public_key()
 
-        # Scenario A: Elliptic Curve (The Assignment Goal)
+        # Case A: ECC Public Key
         if isinstance(pub_key, ec.EllipticCurvePublicKey):
-            curve_oid = pub_key.curve.name
-            print(f"[TYPE] Elliptic Curve Cryptography (ECC)")
-            print(f"[OID]  {curve_oid}")
-            
-            # Look up the math details
-            details = CURVE_REGISTRY.get(curve_oid)
-            if details:
-                print(f"\n>> Mathematical Extraction for {details['common_name']}:")
-                print(f"   Equation: {details['equation']}")
-                print(f"   Field Prime (p): {details['p']}")
-                print(f"   Hex Dump (p): {details['p_hex'][:40]}... (truncated)")
+            print("[TYPE] Elliptic Curve Digital Signature Algorithm (ECDSA)")
+
+            curve = pub_key.curve
+            curve_name = getattr(curve, "name", None)
+
+            print(f"Curve Used: {curve_name}")
+
+            if curve_name in CURVE_REGISTRY:
+                details = CURVE_REGISTRY[curve_name]
+                print(f"\n>> Mathematical Details for {details['common_name']}:")
+                print(f"  Equation: {details['equation']}")
+                print(f"  Field Prime (p): {details['p']}")
+                print(f"  Hex(p): {details['p_hex'][:60]}...")
             else:
-                print(f">> Parameters for {curve_oid} are not in the local registry.")
+                print(">> Curve parameters not found in local registry.")
 
-        # Scenario B: RSA (Like BITS Website)
+        # Case B: RSA Public Key
         elif isinstance(pub_key, rsa.RSAPublicKey):
-            print(f"[TYPE] RSA (Rivest–Shamir–Adleman)")
-            print(f"   Key Size: {pub_key.key_size} bits")
-            print(f"   Public Exponent (e): {pub_key.public_numbers().e}")
-            print(f"   Modulus (n): {str(pub_key.public_numbers().n)[:40]}... (truncated)")
-            print("\n[NOTE] This website does NOT use Elliptic Curves.")
-        
-        else:
-            print(f"[TYPE] Unknown Algorithm: {type(pub_key)}")
+            print("[TYPE] RSA (Not ECC)")
+            nums = pub_key.public_numbers()
+            print(f"Key Size: {pub_key.key_size} bits")
+            print(f"Exponent (e): {nums.e}")
+            print(f"Modulus (n): {str(nums.n)[:60]}...")
+            print("\n[NOTE] This website does NOT use Elliptic Curve Cryptography.")
 
-# --- Main Driver Code ---
+        else:
+            print("[ERROR] Unknown Public Key Type:", type(pub_key))
+
+
+# ------------------------------------------------------------
+# MAIN PROGRAM
+# ------------------------------------------------------------
 if __name__ == "__main__":
-    user_input = input("Enter website (e.g., google.com, bits-pilani.ac.in): ").strip()
-    
-    # 1. Clean Input
-    target_host = CertificateExtractor.clean_hostname(user_input)
-    
-    if target_host:
-        # 2. Extract Packet
-        raw_cert = CertificateExtractor.get_certificate(target_host)
-        
-        if raw_cert:
-            # 3. Save Packet (Actually extracting the file)
-            CertificateExtractor.save_to_file(raw_cert, f"{target_host}.cer")
-            
-            # 4. Analyze Packet
-            analyzer = CertificateAnalyzer(raw_cert)
-            analyzer.print_general_info()
-            analyzer.analyze_public_key()
+    url = input("Enter website (e.g., google.com or https://www.bits-pilani.ac.in): ").strip()
+    hostname = CertificateExtractor.clean_hostname(url)
+
+    raw = CertificateExtractor.get_certificate(hostname)
+
+    if raw:
+        CertificateExtractor.save_to_file(raw, f"{hostname}.cer")
+        analyzer = CertificateAnalyzer(raw)
+        analyzer.print_general_info()
+        analyzer.analyze_public_key()
